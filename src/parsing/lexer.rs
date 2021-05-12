@@ -271,18 +271,22 @@ mod test {
 
     #[test]
     fn simple_dice_expression() {
-        let lexer = Lexer::new("repeat 6d6 5 | top 3 | sum");
+        let lexer = Lexer::new("repeat (6d6 + 3) 5 | top 3 | sum");
         let expected = vec![
             token(0..6, "repeat", TokenKind::Identifier),
-            token(7..8, "6", TokenKind::Integer),
-            token(8..9, "d", TokenKind::D),
-            token(9..10, "6", TokenKind::Integer),
-            token(11..12, "5", TokenKind::Integer),
-            token(13..14, "|", TokenKind::Pipe),
-            token(15..18, "top", TokenKind::Identifier),
-            token(19..20, "3", TokenKind::Integer),
-            token(21..22, "|", TokenKind::Pipe),
-            token(23..26, "sum", TokenKind::Identifier),
+            token(7..8, "(", TokenKind::OpenParen),
+            token(8..9, "6", TokenKind::Integer),
+            token(9..10, "d", TokenKind::D),
+            token(10..11, "6", TokenKind::Integer),
+            token(12..13, "+", TokenKind::Plus),
+            token(14..15, "3", TokenKind::Integer),
+            token(15..16, ")", TokenKind::CloseParen),
+            token(17..18, "5", TokenKind::Integer),
+            token(19..20, "|", TokenKind::Pipe),
+            token(21..24, "top", TokenKind::Identifier),
+            token(25..26, "3", TokenKind::Integer),
+            token(27..28, "|", TokenKind::Pipe),
+            token(29..32, "sum", TokenKind::Identifier),
         ];
         assert!(lexer.eq(expected.into_iter()));
     }
