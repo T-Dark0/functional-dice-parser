@@ -14,23 +14,30 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn advance_and_make_token(
-        &mut self,
-        lexeme: &'a str,
-        rest: &'a str,
-        consumed: usize,
-        kind: TokenKind,
-    ) -> Token<'a> {
+    fn advance_and_make_token(&mut self, parsed: Parsed<'a>, kind: TokenKind) -> Token<'a> {
         let old_consumed_bytes = self.consumed_bytes;
-        let new_consumed_bytes = old_consumed_bytes + consumed;
+        let new_consumed_bytes = old_consumed_bytes + parsed.consumed;
 
-        self.string = rest;
+        self.string = parsed.rest;
         self.consumed_bytes = new_consumed_bytes;
 
         Token {
             at: old_consumed_bytes..new_consumed_bytes,
-            lexeme,
+            lexeme: parsed.lexeme,
             kind,
+        }
+    }
+
+    fn advance_and_make_invalid_token(&mut self, parsed: Parsed<'a>) -> InvalidToken<'a> {
+        let old_consumed_bytes = self.consumed_bytes;
+        let new_consumed_bytes = old_consumed_bytes + parsed.consumed;
+
+        self.string = parsed.rest;
+        self.consumed_bytes = new_consumed_bytes;
+
+        InvalidToken {
+            at: old_consumed_bytes..new_consumed_bytes,
+            lexeme: parsed.lexeme,
         }
     }
 }
@@ -41,22 +48,22 @@ macro_rules! make_lexer_sequence {
         $first_function:ident $(($first_ch:expr))?, $first_kind:expr;
         $($function:ident $(($ch:expr))?, $kind:expr;)*
     ) => {
-        if let Some(Parsed(lexeme, rest, consumed)) = $first_function($string, $($first_ch)?) {
-            $self.advance_and_make_token(lexeme, rest, consumed, $first_kind)
+        if let Some(parsed) = $first_function($string, $($first_ch)?) {
+            Ok($self.advance_and_make_token(parsed, $first_kind))
         }
         $(
-            else if let Some(Parsed(lexeme, rest, consumed)) = $function($string, $($ch)?) {
-                $self.advance_and_make_token(lexeme, rest, consumed, $kind)
+            else if let Some(parsed) = $function($string, $($ch)?) {
+                Ok($self.advance_and_make_token(parsed, $kind))
             }
         )*
         else {
-            todo!()
+            Err($self.advance_and_make_invalid_token(invalid($string)))
         }
     };
 }
 
 impl<'a> Iterator for Lexer<'a> {
-    type Item = Token<'a>;
+    type Item = Result<Token<'a>, InvalidToken<'a>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let (string, consumed) = skip_whitespace(self.string);
@@ -107,12 +114,12 @@ fn integer(string: &str) -> Option<Parsed> {
     let rest = &string[last_num + width..];
     let consumed = last_num + width;
 
-    Some(Parsed(num, rest, consumed))
+    Some(Parsed::new(num, rest, consumed))
 }
 
 fn d_token(string: &str) -> Option<Parsed> {
     if string.starts_with("d") || string.starts_with("D") {
-        Some(Parsed(&string[..1], &string[1..], 1))
+        Some(Parsed::new(&string[..1], &string[1..], 1))
     } else {
         None
     }
@@ -120,7 +127,7 @@ fn d_token(string: &str) -> Option<Parsed> {
 
 fn single_char(string: &str, ch: char) -> Option<Parsed> {
     if string.starts_with(ch) {
-        Some(Parsed(&string[..1], &string[1..], 1))
+        Some(Parsed::new(&string[..1], &string[1..], 1))
     } else {
         None
     }
@@ -137,17 +144,55 @@ fn identifier(string: &str) -> Option<Parsed> {
     let rest = &string[last_alpha + width..];
     let consumed = last_alpha + width;
 
-    Some(Parsed(alpha, rest, consumed))
+    Some(Parsed::new(alpha, rest, consumed))
+}
+
+fn invalid(string: &str) -> Parsed {
+    let (last_index, last_char) = string
+        .char_indices()
+        .take_while(|(_, c)| !c.is_whitespace())
+        .last()
+        .expect("Attempted to construct an invalid token with zero characters");
+    // This `expect` will only ever fail if `string` begins with whitespace or is empty.
+    // `string` may never begin with whitespace, because whitespace is skipped before attempting token recognition
+    // `string` may never be empty, because in that case the lexer returns `None` before attempting token recognition
+
+    let width = last_char.len_utf8();
+    let index = &string[..last_index + width];
+    let rest = &string[last_index + width..];
+    let consumed = last_index + width;
+
+    Parsed::new(index, rest, consumed)
 }
 
 /// The successful result of a parsing operation
-struct Parsed<'a>(&'a str, &'a str, usize);
+struct Parsed<'a> {
+    lexeme: &'a str,
+    rest: &'a str,
+    consumed: usize,
+}
+
+impl<'a> Parsed<'a> {
+    fn new(lexeme: &'a str, rest: &'a str, consumed: usize) -> Self {
+        Parsed {
+            lexeme,
+            rest,
+            consumed,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token<'a> {
     at: Range<usize>,
     lexeme: &'a str,
     kind: TokenKind,
+}
+/// An invalid token: the result of attempting to lex invalid input
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidToken<'a> {
+    at: Range<usize>,
+    lexeme: &'a str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,11 +217,15 @@ mod test {
         Token { at, lexeme, kind }
     }
 
+    fn invalid_token(at: Range<usize>, lexeme: &str) -> InvalidToken {
+        InvalidToken { at, lexeme }
+    }
+
     #[test]
     fn one_integer() {
-        let mut lexer = Lexer::new("123");
-        assert_eq!(lexer.next(), Some(token(0..3, "123", TokenKind::Integer)));
-        assert_eq!(lexer.next(), None);
+        let lexer = Lexer::new("123");
+        let expected = vec![token(0..3, "123", TokenKind::Integer)];
+        assert!(lexer.eq(expected.into_iter().map(|x| Ok(x))));
     }
 
     #[test]
@@ -189,15 +238,17 @@ mod test {
             token(12..15, "789", TokenKind::Integer),
             token(16..22, "¹²³", TokenKind::Integer),
         ];
-        assert!(lexer.eq(expected.into_iter()));
+        assert!(lexer.eq(expected.into_iter().map(|x| Ok(x))));
     }
 
     #[test]
     fn d_tokens() {
-        let mut lexer = Lexer::new("dD");
-        assert_eq!(lexer.next(), Some(token(0..1, "d", TokenKind::D)));
-        assert_eq!(lexer.next(), Some(token(1..2, "D", TokenKind::D)));
-        assert_eq!(lexer.next(), None);
+        let lexer = Lexer::new("dD");
+        let expected = vec![
+            token(0..1, "d", TokenKind::D),
+            token(1..2, "D", TokenKind::D),
+        ];
+        assert!(lexer.eq(expected.into_iter().map(|x| Ok(x))));
     }
 
     #[test]
@@ -208,7 +259,7 @@ mod test {
             token(2..3, "d", TokenKind::D),
             token(3..4, "7", TokenKind::Integer),
         ];
-        assert!(lexer.eq(expected.into_iter()));
+        assert!(lexer.eq(expected.into_iter().map(|x| Ok(x))));
     }
 
     #[test]
@@ -225,7 +276,7 @@ mod test {
             token(14..15, "/", TokenKind::Slash),
             token(16..17, "5", TokenKind::Integer),
         ];
-        assert!(lexer.eq(expected.into_iter()));
+        assert!(lexer.eq(expected.into_iter().map(|x| Ok(x))));
     }
 
     #[test]
@@ -238,7 +289,7 @@ mod test {
             token(4..5, "+", TokenKind::Plus),
             token(6..7, "3", TokenKind::Integer),
         ];
-        assert!(lexer.eq(expected.into_iter()));
+        assert!(lexer.eq(expected.into_iter().map(|x| Ok(x))));
     }
 
     #[test]
@@ -248,7 +299,7 @@ mod test {
             token(0..1, "-", TokenKind::Minus),
             token(1..3, "13", TokenKind::Integer),
         ];
-        assert!(lexer.eq(expected.into_iter()));
+        assert!(lexer.eq(expected.into_iter().map(|x| Ok(x))));
     }
 
     #[test]
@@ -259,14 +310,14 @@ mod test {
             token(1..2, "|", TokenKind::Pipe),
             token(2..3, ")", TokenKind::CloseParen),
         ];
-        assert!(lexer.eq(expected.into_iter()));
+        assert!(lexer.eq(expected.into_iter().map(|x| Ok(x))));
     }
 
     #[test]
     fn identifier() {
         let lexer = Lexer::new("ident");
         let expected = vec![token(0..5, "ident", TokenKind::Identifier)];
-        assert!(lexer.eq(expected.into_iter()));
+        assert!(lexer.eq(expected.into_iter().map(|x| Ok(x))));
     }
 
     #[test]
@@ -287,6 +338,17 @@ mod test {
             token(25..26, "3", TokenKind::Integer),
             token(27..28, "|", TokenKind::Pipe),
             token(29..32, "sum", TokenKind::Identifier),
+        ];
+        assert!(lexer.eq(expected.into_iter().map(|x| Ok(x))));
+    }
+
+    #[test]
+    fn with_invalid_token() {
+        let lexer = Lexer::new("123 @#[§ +");
+        let expected = vec![
+            Ok(token(0..3, "123", TokenKind::Integer)),
+            Err(invalid_token(4..9, "@#[§")),
+            Ok(token(10..11, "+", TokenKind::Plus)),
         ];
         assert!(lexer.eq(expected.into_iter()));
     }
