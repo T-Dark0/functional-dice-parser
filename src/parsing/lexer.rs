@@ -13,10 +13,30 @@ impl<'a> Lexer<'a> {
             consumed_bytes: 0,
         }
     }
+
+    fn advance_and_make_token(
+        &mut self,
+        lexeme: &'a str,
+        rest: &'a str,
+        consumed: usize,
+        kind: TokenKind,
+    ) -> Token<'a> {
+        let old_consumed_bytes = self.consumed_bytes;
+        let new_consumed_bytes = old_consumed_bytes + consumed;
+
+        self.string = rest;
+        self.consumed_bytes = new_consumed_bytes;
+
+        Token {
+            at: old_consumed_bytes..new_consumed_bytes,
+            lexeme,
+            kind,
+        }
+    }
 }
 
 impl<'a> Iterator for Lexer<'a> {
-    type Item = Result<Token<'a>, ErrorKind>;
+    type Item = Token<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let (string, consumed) = skip_whitespace(self.string);
@@ -27,37 +47,16 @@ impl<'a> Iterator for Lexer<'a> {
             return None;
         }
 
-        let token = integer(string).map(|Parsed(num, rest, consumed)| {
-            let old_consumed_bytes = self.consumed_bytes;
-            let new_consumed_bytes = old_consumed_bytes + consumed;
-
-            self.string = rest;
-            self.consumed_bytes = new_consumed_bytes;
-
-            Token {
-                at: old_consumed_bytes..new_consumed_bytes,
-                lexeme: num,
-                kind: TokenKind::Integer,
-            }
-        });
+        let token = if let Some(Parsed(num, rest, consumed)) = integer(string) {
+            self.advance_and_make_token(num, rest, consumed, TokenKind::Integer)
+        } else if let Some(Parsed(d, rest, consumed)) = d_token(string) {
+            self.advance_and_make_token(d, rest, consumed, TokenKind::D)
+        } else {
+            todo!()
+        };
 
         Some(token)
     }
-}
-
-fn integer(string: &str) -> Result<Parsed<&str>, ErrorKind> {
-    let (last_num, last_char) = string
-        .char_indices()
-        .take_while(|(_, c)| c.is_numeric())
-        .last()
-        .ok_or(ErrorKind::EmptyIntegerLiteral)?;
-
-    let width = last_char.len_utf8();
-    let num = &string[..last_num + width];
-    let rest = &string[last_num + width..];
-    let consumed = last_num + width;
-
-    Ok(Parsed(num, rest, consumed))
 }
 
 fn skip_whitespace(string: &str) -> (&str, usize) {
@@ -69,6 +68,28 @@ fn skip_whitespace(string: &str) -> (&str, usize) {
         .unwrap_or(0);
 
     (&string[consumed..], consumed)
+}
+
+fn integer(string: &str) -> Option<Parsed<&str>> {
+    let (last_num, last_char) = string
+        .char_indices()
+        .take_while(|(_, c)| c.is_numeric())
+        .last()?;
+
+    let width = last_char.len_utf8();
+    let num = &string[..last_num + width];
+    let rest = &string[last_num + width..];
+    let consumed = last_num + width;
+
+    Some(Parsed(num, rest, consumed))
+}
+
+fn d_token(string: &str) -> Option<Parsed<&str>> {
+    if string.starts_with("d") || string.starts_with("D") {
+        Some(Parsed(&string[..1], &string[1..], 1))
+    } else {
+        None
+    }
 }
 
 /// The successful result of a parsing operation
@@ -84,11 +105,7 @@ pub struct Token<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
     Integer,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ErrorKind {
-    EmptyIntegerLiteral,
+    D,
 }
 
 #[cfg(test)]
@@ -102,10 +119,7 @@ mod test {
     #[test]
     fn one_integer() {
         let mut lexer = Lexer::new("123");
-        assert_eq!(
-            lexer.next(),
-            Some(Ok(token(0..3, "123", TokenKind::Integer)))
-        );
+        assert_eq!(lexer.next(), Some(token(0..3, "123", TokenKind::Integer)));
         assert_eq!(lexer.next(), None);
     }
 
@@ -119,6 +133,25 @@ mod test {
             token(12..15, "789", TokenKind::Integer),
             token(16..22, "¹²³", TokenKind::Integer),
         ];
-        assert!(lexer.eq(expected.into_iter().map(|x| Ok(x))));
+        assert!(lexer.eq(expected.into_iter()));
+    }
+
+    #[test]
+    fn d_tokens() {
+        let mut lexer = Lexer::new("dD");
+        assert_eq!(lexer.next(), Some(token(0..1, "d", TokenKind::D)));
+        assert_eq!(lexer.next(), Some(token(1..2, "D", TokenKind::D)));
+        assert_eq!(lexer.next(), None);
+    }
+
+    #[test]
+    fn dice_expression() {
+        let lexer = Lexer::new("15d7");
+        let expected = vec![
+            token(0..2, "15", TokenKind::Integer),
+            token(2..3, "d", TokenKind::D),
+            token(3..4, "7", TokenKind::Integer),
+        ];
+        assert!(lexer.eq(expected.into_iter()));
     }
 }
