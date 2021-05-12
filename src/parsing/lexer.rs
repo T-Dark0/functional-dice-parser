@@ -75,6 +75,10 @@ impl<'a> Iterator for Lexer<'a> {
             single_char('-'), TokenKind::Minus;
             single_char('*'), TokenKind::Star;
             single_char('/'), TokenKind::Slash;
+            single_char('|'), TokenKind::Pipe;
+            single_char('('), TokenKind::OpenParen;
+            single_char(')'), TokenKind::CloseParen;
+            identifier, TokenKind::Identifier;
         );
 
         Some(token)
@@ -122,6 +126,20 @@ fn single_char(string: &str, ch: char) -> Option<Parsed> {
     }
 }
 
+fn identifier(string: &str) -> Option<Parsed> {
+    let (last_alpha, last_char) = string
+        .char_indices()
+        .take_while(|(_, c)| c.is_alphabetic())
+        .last()?;
+
+    let width = last_char.len_utf8();
+    let alpha = &string[..last_alpha + width];
+    let rest = &string[last_alpha + width..];
+    let consumed = last_alpha + width;
+
+    Some(Parsed(alpha, rest, consumed))
+}
+
 /// The successful result of a parsing operation
 struct Parsed<'a>(&'a str, &'a str, usize);
 
@@ -140,6 +158,10 @@ pub enum TokenKind {
     Minus,
     Star,
     Slash,
+    Pipe,
+    OpenParen,
+    CloseParen,
+    Identifier,
 }
 
 #[cfg(test)]
@@ -225,6 +247,42 @@ mod test {
         let expected = vec![
             token(0..1, "-", TokenKind::Minus),
             token(1..3, "13", TokenKind::Integer),
+        ];
+        assert!(lexer.eq(expected.into_iter()));
+    }
+
+    #[test]
+    fn pipes_and_parens() {
+        let lexer = Lexer::new("(|)");
+        let expected = vec![
+            token(0..1, "(", TokenKind::OpenParen),
+            token(1..2, "|", TokenKind::Pipe),
+            token(2..3, ")", TokenKind::CloseParen),
+        ];
+        assert!(lexer.eq(expected.into_iter()));
+    }
+
+    #[test]
+    fn identifier() {
+        let lexer = Lexer::new("ident");
+        let expected = vec![token(0..5, "ident", TokenKind::Identifier)];
+        assert!(lexer.eq(expected.into_iter()));
+    }
+
+    #[test]
+    fn simple_dice_expression() {
+        let lexer = Lexer::new("repeat 6d6 5 | top 3 | sum");
+        let expected = vec![
+            token(0..6, "repeat", TokenKind::Identifier),
+            token(7..8, "6", TokenKind::Integer),
+            token(8..9, "d", TokenKind::D),
+            token(9..10, "6", TokenKind::Integer),
+            token(11..12, "5", TokenKind::Integer),
+            token(13..14, "|", TokenKind::Pipe),
+            token(15..18, "top", TokenKind::Identifier),
+            token(19..20, "3", TokenKind::Integer),
+            token(21..22, "|", TokenKind::Pipe),
+            token(23..26, "sum", TokenKind::Identifier),
         ];
         assert!(lexer.eq(expected.into_iter()));
     }
