@@ -35,6 +35,26 @@ impl<'a> Lexer<'a> {
     }
 }
 
+macro_rules! make_lexer_sequence {
+    (
+        $self:ident, $string:ident;
+        $first_function:ident $(($first_ch:expr))?, $first_kind:expr;
+        $($function:ident $(($ch:expr))?, $kind:expr;)*
+    ) => {
+        if let Some(Parsed(lexeme, rest, consumed)) = $first_function($string, $($first_ch)?) {
+            $self.advance_and_make_token(lexeme, rest, consumed, $first_kind)
+        }
+        $(
+            else if let Some(Parsed(lexeme, rest, consumed)) = $function($string, $($ch)?) {
+                $self.advance_and_make_token(lexeme, rest, consumed, $kind)
+            }
+        )*
+        else {
+            todo!()
+        }
+    };
+}
+
 impl<'a> Iterator for Lexer<'a> {
     type Item = Token<'a>;
 
@@ -47,13 +67,15 @@ impl<'a> Iterator for Lexer<'a> {
             return None;
         }
 
-        let token = if let Some(Parsed(num, rest, consumed)) = integer(string) {
-            self.advance_and_make_token(num, rest, consumed, TokenKind::Integer)
-        } else if let Some(Parsed(d, rest, consumed)) = d_token(string) {
-            self.advance_and_make_token(d, rest, consumed, TokenKind::D)
-        } else {
-            todo!()
-        };
+        let token = make_lexer_sequence!(
+            self, string;
+            integer, TokenKind::Integer;
+            d_token, TokenKind::D;
+            single_char('+'), TokenKind::Plus;
+            single_char('-'), TokenKind::Minus;
+            single_char('*'), TokenKind::Star;
+            single_char('/'), TokenKind::Slash;
+        );
 
         Some(token)
     }
@@ -92,6 +114,14 @@ fn d_token(string: &str) -> Option<Parsed> {
     }
 }
 
+fn single_char(string: &str, ch: char) -> Option<Parsed> {
+    if string.starts_with(ch) {
+        Some(Parsed(&string[..1], &string[1..], 1))
+    } else {
+        None
+    }
+}
+
 /// The successful result of a parsing operation
 struct Parsed<'a>(&'a str, &'a str, usize);
 
@@ -106,6 +136,10 @@ pub struct Token<'a> {
 pub enum TokenKind {
     Integer,
     D,
+    Plus,
+    Minus,
+    Star,
+    Slash,
 }
 
 #[cfg(test)]
@@ -151,6 +185,46 @@ mod test {
             token(0..2, "15", TokenKind::Integer),
             token(2..3, "d", TokenKind::D),
             token(3..4, "7", TokenKind::Integer),
+        ];
+        assert!(lexer.eq(expected.into_iter()));
+    }
+
+    #[test]
+    fn arithmetics() {
+        let lexer = Lexer::new("1 + 2 - 3 * 4 / 5");
+        let expected = vec![
+            token(0..1, "1", TokenKind::Integer),
+            token(2..3, "+", TokenKind::Plus),
+            token(4..5, "2", TokenKind::Integer),
+            token(6..7, "-", TokenKind::Minus),
+            token(8..9, "3", TokenKind::Integer),
+            token(10..11, "*", TokenKind::Star),
+            token(12..13, "4", TokenKind::Integer),
+            token(14..15, "/", TokenKind::Slash),
+            token(16..17, "5", TokenKind::Integer),
+        ];
+        assert!(lexer.eq(expected.into_iter()));
+    }
+
+    #[test]
+    fn dice_expression_with_bonus() {
+        let lexer = Lexer::new("6d6 + 3");
+        let expected = vec![
+            token(0..1, "6", TokenKind::Integer),
+            token(1..2, "d", TokenKind::D),
+            token(2..3, "6", TokenKind::Integer),
+            token(4..5, "+", TokenKind::Plus),
+            token(6..7, "3", TokenKind::Integer),
+        ];
+        assert!(lexer.eq(expected.into_iter()));
+    }
+
+    #[test]
+    fn negative_number() {
+        let lexer = Lexer::new("-13");
+        let expected = vec![
+            token(0..1, "-", TokenKind::Minus),
+            token(1..3, "13", TokenKind::Integer),
         ];
         assert!(lexer.eq(expected.into_iter()));
     }
