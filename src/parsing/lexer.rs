@@ -70,7 +70,7 @@ fn skip_whitespace(string: &str) -> (&str, usize) {
     (&string[consumed..], consumed)
 }
 
-fn integer(string: &str) -> Option<Parsed<&str>> {
+fn integer(string: &str) -> Option<Parsed> {
     let (last_num, last_char) = string
         .char_indices()
         .take_while(|(_, c)| c.is_numeric())
@@ -84,7 +84,7 @@ fn integer(string: &str) -> Option<Parsed<&str>> {
     Some(Parsed(num, rest, consumed))
 }
 
-fn d_token(string: &str) -> Option<Parsed<&str>> {
+fn d_token(string: &str) -> Option<Parsed> {
     if string.starts_with("d") || string.starts_with("D") {
         Some(Parsed(&string[..1], &string[1..], 1))
     } else {
@@ -93,7 +93,7 @@ fn d_token(string: &str) -> Option<Parsed<&str>> {
 }
 
 /// The successful result of a parsing operation
-struct Parsed<'a, T>(T, &'a str, usize);
+struct Parsed<'a>(&'a str, &'a str, usize);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token<'a> {
